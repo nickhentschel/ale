@@ -95,6 +95,11 @@ let s:default_registry = {
 \       'suggested_filetypes': ['python'],
 \       'description': 'Fix Python files with yapf.',
 \   },
+\   'remark': {
+\       'function': 'ale#fixers#remark#Fix',
+\       'suggested_filetypes': ['markdown'],
+\       'description': 'Fix Markdown files with remark.',
+\   },
 \   'rubocop': {
 \       'function': 'ale#fixers#rubocop#Fix',
 \       'suggested_filetypes': ['ruby'],
