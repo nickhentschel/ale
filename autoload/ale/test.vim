@@ -85,3 +85,16 @@ function! ale#test#GetPreviewWindowText() abort
         endif
     endfor
 endfunction
+
+function! ale#test#FlushJobs() abort
+    " The variable is checked for in a loop, as calling one series of
+    " callbacks can trigger a further series of callbacks.
+    while exists('g:ale_run_synchronously_callbacks')
+        let l:callbacks = g:ale_run_synchronously_callbacks
+        unlet g:ale_run_synchronously_callbacks
+
+        for l:Callback in l:callbacks
+            call l:Callback()
+        endfor
+    endwhile
+endfunction

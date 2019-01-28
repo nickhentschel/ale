@@ -70,7 +70,7 @@ Execute(ALE should delete managed files/directories appropriately after linting)
   AssertEqual 'foobar', &filetype
 
   call ale#Queue(0)
-  call ale#engine#WaitForJobs(2000)
+  call ale#test#FlushJobs()
 
   Assert !filereadable(g:filename), 'The temporary file was not deleted'
   Assert !isdirectory(g:directory), 'The temporary directory was not deleted'

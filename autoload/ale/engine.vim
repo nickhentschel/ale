@@ -5,19 +5,9 @@
 " Remapping of linter problems.
 let g:ale_type_map = get(g:, 'ale_type_map', {})
 
-" Stores information for each job including:
-"
-" linter: The linter dictionary for the job.
-" buffer: The buffer number for the job.
-" output: The array of lines for the output of the job.
-if !has_key(s:, 'job_info_map')
-    let s:job_info_map = {}
-endif
-
 if !has_key(s:, 'executable_cache_map')
     let s:executable_cache_map = {}
 endif
-
 
 function! ale#engine#CleanupEveryBuffer() abort
     for l:key in keys(g:ale_buffer_info)
@@ -121,12 +111,6 @@ function! ale#engine#CreateDirectory(buffer) abort
     return ale#command#CreateDirectory(a:buffer)
 endfunction
 
-function! s:GatherOutput(job_id, line) abort
-    if has_key(s:job_info_map, a:job_id)
-        call add(s:job_info_map[a:job_id].output, a:line)
-    endif
-endfunction
-
 function! ale#engine#HandleLoclist(linter_name, buffer, loclist, from_other_source) abort
     let l:info = get(g:ale_buffer_info, a:buffer, {})
 
@@ -170,27 +154,24 @@ function! ale#engine#HandleLoclist(linter_name, buffer, loclist, from_other_sour
     call ale#engine#SetResults(a:buffer, l:info.loclist)
 endfunction
 
-function! s:HandleExit(job_id, exit_code) abort
-    if !has_key(s:job_info_map, a:job_id)
+function! s:HandleExit(job_info, buffer, output, exit_code) abort
+    if !has_key(g:ale_buffer_info, a:buffer)
         return
     endif
 
-    let l:job_info = s:job_info_map[a:job_id]
-    let l:linter = l:job_info.linter
-    let l:output = l:job_info.output
-    let l:buffer = l:job_info.buffer
-    let l:executable = l:job_info.executable
-    let l:next_chain_index = l:job_info.next_chain_index
+    let l:job_id = a:job_info.job_id
+    let l:linter = a:job_info.linter
+    let l:executable = a:job_info.executable
+    let l:next_chain_index = a:job_info.next_chain_index
 
     if g:ale_history_enabled
-        call ale#history#SetExitCode(l:buffer, a:job_id, a:exit_code)
+        call ale#history#SetExitCode(a:buffer, l:job_id, a:exit_code)
     endif
 
     " Remove this job from the list.
-    call ale#job#Stop(a:job_id)
-    call remove(s:job_info_map, a:job_id)
-    call filter(g:ale_buffer_info[l:buffer].job_list, 'v:val isnot# a:job_id')
-    call filter(g:ale_buffer_info[l:buffer].active_linter_list, 'v:val isnot# l:linter.name')
+    call ale#job#Stop(l:job_id)
+    call filter(g:ale_buffer_info[a:buffer].job_list, 'v:val[0] isnot# l:job_id')
+    call filter(g:ale_buffer_info[a:buffer].active_linter_list, 'v:val isnot# l:linter.name')
 
     " Stop here if we land in the handle for a job completing if we're in
     " a sandbox.
@@ -198,29 +179,29 @@ function! s:HandleExit(job_id, exit_code) abort
         return
     endif
 
-    if has('nvim') && !empty(l:output) && empty(l:output[-1])
-        call remove(l:output, -1)
+    if has('nvim') && !empty(a:output) && empty(a:output[-1])
+        call remove(a:output, -1)
     endif
 
     if l:next_chain_index < len(get(l:linter, 'command_chain', []))
-        call s:InvokeChain(l:buffer, l:executable, l:linter, l:next_chain_index, l:output)
+        call s:InvokeChain(a:buffer, l:executable, l:linter, l:next_chain_index, a:output)
 
         return
     endif
 
     " Log the output of the command for ALEInfo if we should.
     if g:ale_history_enabled && g:ale_history_log_output
-        call ale#history#RememberOutput(l:buffer, a:job_id, l:output[:])
+        call ale#history#RememberOutput(a:buffer, l:job_id, a:output[:])
     endif
 
     try
-        let l:loclist = ale#util#GetFunction(l:linter.callback)(l:buffer, l:output)
+        let l:loclist = ale#util#GetFunction(l:linter.callback)(a:buffer, a:output)
     " Handle the function being unknown, or being deleted.
     catch /E700/
         let l:loclist = []
     endtry
 
-    call ale#engine#HandleLoclist(l:linter.name, l:buffer, l:loclist, 0)
+    call ale#engine#HandleLoclist(l:linter.name, a:buffer, l:loclist, 0)
 endfunction
 
 function! ale#engine#SetResults(buffer, loclist) abort
@@ -456,70 +437,29 @@ function! s:RunJob(options) abort
         let l:read_buffer = 0
     endif
 
-    let l:command = ale#job#PrepareCommand(l:buffer, l:command)
-    let l:job_options = {
-    \   'mode': 'nl',
-    \   'exit_cb': function('s:HandleExit'),
+    let l:job_info = {
+    \   'linter': l:linter,
+    \   'executable': l:executable,
+    \   'next_chain_index': l:next_chain_index,
     \}
 
-    if l:output_stream is# 'stderr'
-        let l:job_options.err_cb = function('s:GatherOutput')
-    elseif l:output_stream is# 'both'
-        let l:job_options.out_cb = function('s:GatherOutput')
-        let l:job_options.err_cb = function('s:GatherOutput')
-    else
-        let l:job_options.out_cb = function('s:GatherOutput')
-    endif
-
-    if get(g:, 'ale_run_synchronously') == 1
-        " Find a unique Job value to use, which will be the same as the ID for
-        " running commands synchronously. This is only for test code.
-        let l:job_id = len(s:job_info_map) + 1
-
-        while has_key(s:job_info_map, l:job_id)
-            let l:job_id += 1
-        endwhile
-    else
-        let l:job_id = ale#job#Start(l:command, l:job_options)
-    endif
-
-    let l:status = 'failed'
+    let l:job_id = ale#command#Run(l:buffer, l:command, {
+    \   'output_stream': l:output_stream,
+    \   'callback': function('s:HandleExit', [l:job_info]),
+    \})
 
     " Only proceed if the job is being run.
     if l:job_id
+        let l:job_info.job_id = l:job_id
+
         " Add the job to the list of jobs, so we can track them.
-        call add(l:info.job_list, l:job_id)
+        call add(l:info.job_list, [l:job_id, l:linter])
 
         if index(l:info.active_linter_list, l:linter.name) < 0
             call add(l:info.active_linter_list, l:linter.name)
         endif
 
-        let l:status = 'started'
-        " Store the ID for the job in the map to read back again.
-        let s:job_info_map[l:job_id] = {
-        \   'linter': l:linter,
-        \   'buffer': l:buffer,
-        \   'executable': l:executable,
-        \   'output': [],
-        \   'next_chain_index': l:next_chain_index,
-        \}
-
         silent doautocmd <nomodeline> User ALEJobStarted
-    endif
-
-    if g:ale_history_enabled
-        call ale#history#Add(l:buffer, l:status, l:job_id, l:command)
-    endif
-
-    if get(g:, 'ale_run_synchronously') == 1
-        " Run a command synchronously if this test option is set.
-        let s:job_info_map[l:job_id].output = systemlist(
-        \   type(l:command) is v:t_list
-        \   ?  join(l:command[0:1]) . ' ' . ale#Escape(l:command[2])
-        \   : l:command
-        \)
-
-        call l:job_options.exit_cb(l:job_id, v:shell_error)
     endif
 
     return l:job_id != 0
@@ -603,18 +543,13 @@ function! s:StopCurrentJobs(buffer, include_lint_file_jobs) abort
     let l:new_job_list = []
     let l:new_active_linter_list = []
 
-    for l:job_id in get(l:info, 'job_list', [])
-        let l:job_info = get(s:job_info_map, l:job_id, {})
-
-        if !empty(l:job_info)
-            if a:include_lint_file_jobs || !l:job_info.linter.lint_file
-                call ale#job#Stop(l:job_id)
-                call remove(s:job_info_map, l:job_id)
-            else
-                call add(l:new_job_list, l:job_id)
-                " Linters with jobs still running are still active.
-                call add(l:new_active_linter_list, l:job_info.linter.name)
-            endif
+    for [l:job_id, l:linter] in get(l:info, 'job_list', [])
+        if a:include_lint_file_jobs || !l:linter.lint_file
+            call ale#job#Stop(l:job_id)
+        else
+            call add(l:new_job_list, [l:job_id, l:linter])
+            " Linters with jobs still running are still active.
+            call add(l:new_active_linter_list, l:linter.name)
         endif
     endfor
 
@@ -780,6 +715,7 @@ function! ale#engine#WaitForJobs(deadline) abort
 
     " NeoVim has a built-in API for this, so use that.
     if has('nvim')
+        call map(l:job_list, 'v:val[0]')
         let l:nvim_code_list = jobwait(l:job_list, a:deadline)
 
         if index(l:nvim_code_list, -1) >= 0
@@ -794,7 +730,7 @@ function! ale#engine#WaitForJobs(deadline) abort
     while l:should_wait_more
         let l:should_wait_more = 0
 
-        for l:job_id in l:job_list
+        for [l:job_id, l:linter] in l:job_list
             if ale#job#IsRunning(l:job_id)
                 let l:now = ale#events#ClockMilliseconds()
 

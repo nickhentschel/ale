@@ -447,6 +447,7 @@ Execute(ALEFix should fix files on the save event):
 
   call SetUpLinters()
   call ale#events#SaveEvent(bufnr(''))
+  call ale#test#FlushJobs()
 
   " We should save the file.
   AssertEqual ['$a', '$b', '$c'], readfile('fix_test_file')
@@ -518,6 +519,7 @@ Execute(ALEFix should still lint with no linters to be applied):
 
   call SetUpLinters()
   call ale#events#SaveEvent(bufnr(''))
+  call ale#test#FlushJobs()
 
   Assert !filereadable('fix_test_file'), 'The file should not have been saved'
 
@@ -552,6 +554,7 @@ Execute(ALEFix should still lint when nothing was fixed on save):
 
   call SetUpLinters()
   call ale#events#SaveEvent(bufnr(''))
+  call ale#test#FlushJobs()
 
   Assert !filereadable('fix_test_file'), 'The file should not have been saved'
 
